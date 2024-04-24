@@ -1,187 +1,149 @@
-#define WIN32_LEAN_AND_MEAN
-
 #include <iostream>
 #include <windows.h>
 #include <ws2tcpip.h>
-#include <cstdlib> 
-#include <conio.h> 
+#include <cstdlib>
+#include <conio.h>
 using namespace std;
 
-#pragma comment(lib, "Ws2_32.lib")
+#pragma comment(lib, "ws2_32.lib")
 
-#define DEFAULT_BUFLEN 512
-#define DEFAULT_PORT "27015"
+#define BUFFER_SIZE 512
+#define SERVER_PORT "27015"
 
-SOCKET ConnectSocket = INVALID_SOCKET;
+SOCKET clientSock = INVALID_SOCKET;
 
-const int windowWidth = 80;
-const int windowHeight = 25;
+const int maxWidth = 80;
+const int maxHeight = 25;
 
-int smileyX = 5;
-int smileyY = 5;
+int cursorX = 5;
+int cursorY = 5;
 
-bool isKeyPressed = false;
-int keyDirection = 0;
-
-void HideCursor() {
-	CONSOLE_CURSOR_INFO cursorInfo;
-	cursorInfo.dwSize = 100;
-	cursorInfo.bVisible = FALSE;
-	SetConsoleCursorInfo(GetStdHandle(STD_OUTPUT_HANDLE), &cursorInfo);
+void DisableCursor() {
+    CONSOLE_CURSOR_INFO info;
+    info.dwSize = 10;
+    info.bVisible = FALSE;
+    SetConsoleCursorInfo(GetStdHandle(STD_OUTPUT_HANDLE), &info);
 }
 
-void DrawSmiley() {
-	system("cls");
-
-	COORD position;
-	position.X = smileyX;
-	position.Y = smileyY;
-	SetConsoleCursorPosition(GetStdHandle(-11), position);
-
-	cout << ":-)";
+void DisplaySmiley() {
+    system("cls");
+    COORD pos = { cursorX, cursorY };
+    SetConsoleCursorPosition(GetStdHandle(STD_OUTPUT_HANDLE), pos);
+    cout << ":)";
 }
 
-DWORD WINAPI Sender(LPVOID param) {
-
-	char message[2] = " ";
-
-	DrawSmiley();
-
-	while (true) {
-		if (_kbhit()) {
-			int key = _getch();
-			if (key == 224 || key == 0) key = _getch();
-			// cout << key << "\n";
-			if (key == 72) { // ������� �����
-				message[0] = 'w';
-				if (smileyY > 0) --smileyY;
-			}
-			else if (key == 80) { // ������� ����
-				message[0] = 's';
-				if (smileyY < windowHeight - 1) ++smileyY;
-			}
-			else  if (key == 77) { // ������� ������
-				message[0] = 'd';
-				if (smileyX < windowWidth - 3) ++smileyX;
-			}
-			else if (key == 75) { // ������� �����
-				message[0] = 'a';
-				if (smileyX > 0) --smileyX;
-			}
-
-			int iSendResult = send(ConnectSocket, message, 2, 0);
-
-			if (iSendResult == SOCKET_ERROR) {
-				cout << "send ���������� � �������: " << WSAGetLastError() << "\n";
-				cout << "���, �������� (send) ��������� ��������� �� ���������� ((\n";
-				closesocket(ConnectSocket);
-				WSACleanup();
-				return 7;
-			}
-
-			DrawSmiley();
-		}
-	}
-
-	return 0;
+DWORD WINAPI CommandSender(void* data) {
+    char command[2] = " ";
+    DisplaySmiley();
+    while (true) {
+        if (_kbhit()) {
+            int input = _getch();
+            if (input == 224 || input == 0) input = _getch();
+            switch (input) {
+                case 72:
+                    command[0] = 'u';
+                    if (cursorY > 0) cursorY--;
+                    break;
+                case 80:
+                    command[0] = 'd';
+                    if (cursorY < maxHeight - 1) cursorY++;
+                    break;
+                case 77:
+                    command[0] = 'r';
+                    if (cursorX < maxWidth - 3) cursorX++;
+                    break;
+                case 75:
+                    command[0] = 'l';
+                    if (cursorX > 0) cursorX--;
+                    break;
+            }
+            if (send(clientSock, command, 2, 0) == SOCKET_ERROR) {
+                cout << "Send failed with error: " << WSAGetLastError() << endl;
+                closesocket(clientSock);
+                WSACleanup();
+                exit(1);
+            }
+            DisplaySmiley();
+        }
+    }
+    return 0;
 }
 
-DWORD WINAPI Receiver(LPVOID param) {
-	while (true) {
-		char answer[DEFAULT_BUFLEN];
-		int iResult = recv(ConnectSocket, answer, DEFAULT_BUFLEN, 0);
-		answer[iResult] = '\0';
-
-		if (iResult > 0) {
-			cout << answer << "\n";
-		}
-		else if (iResult == 0)
-			cout << "���������� � �������� �������.\n";
-		else
-			cout << "recv ���������� � �������: " << WSAGetLastError() << "\n";
-	}
-	return 0;
+DWORD WINAPI ResponseReceiver(void* data) {
+    while (true) {
+        char resp[BUFFER_SIZE];
+        int numReceived = recv(clientSock, resp, BUFFER_SIZE, 0);
+        resp[numReceived] = '\0';
+        if (numReceived > 0) {
+            cout << resp << endl;
+        } else if (numReceived == 0) {
+            cout << "Server closed the connection.\n";
+        } else {
+            cout << "Recv failed with error: " << WSAGetLastError() << endl;
+        }
+    }
+    return 0;
 }
 
 int main() {
-	setlocale(0, "");
-	system("title ������");
+    setlocale(0, "");
+    system("title Emoji Control Panel");
 
-	WSADATA wsaData;
-	int iResult = WSAStartup(MAKEWORD(2, 2), &wsaData);
-	if (iResult != 0) {
-		cout << "WSAStartup ���������� � �������: " << iResult << "\n";
-		return 11;
-	}
+    WSADATA data;
+    if (WSAStartup(MAKEWORD(2, 2), &data) != 0) {
+        cout << "WSAStartup failed.\n";
+        return 1;
+    }
 
-	addrinfo hints;
-	ZeroMemory(&hints, sizeof(hints));
-	hints.ai_family = AF_UNSPEC;
-	hints.ai_socktype = SOCK_STREAM;
-	hints.ai_protocol = IPPROTO_TCP;
+    struct addrinfo hints, *servinfo;
+    ZeroMemory(&hints, sizeof(hints));
+    hints.ai_family = AF_UNSPEC;
+    hints.ai_socktype = SOCK_STREAM;
+    hints.ai_protocol = IPPROTO_TCP;
 
-	const char* ip = "localhost";
-	addrinfo* result = NULL;
-	iResult = getaddrinfo(ip, DEFAULT_PORT, &hints, &result);
+    if (getaddrinfo("127.0.0.1", SERVER_PORT, &hints, &servinfo) != 0) {
+        cout << "Getaddrinfo failed.\n";
+        WSACleanup();
+        return 1;
+    }
 
-	if (iResult != 0) {
-		cout << "getaddrinfo ���������� � �������: " << iResult << "\n";
-		WSACleanup();
-		return 12;
-	}
+    for (auto p = servinfo; p != NULL; p = p->ai_next) {
+        clientSock = socket(p->ai_family, p->ai_socktype, p->ai_protocol);
+        if (clientSock == INVALID_SOCKET) {
+            cout << "Socket creation failed with error: " << WSAGetLastError() << endl;
+            WSACleanup();
+            return 1;
+        }
 
-	for (addrinfo* ptr = result; ptr != NULL; ptr = ptr->ai_next) {
-		ConnectSocket = socket(ptr->ai_family, ptr->ai_socktype, ptr->ai_protocol);
+        if (connect(clientSock, p->ai_addr, (int)p->ai_addrlen) == SOCKET_ERROR) {
+            closesocket(clientSock);
+            clientSock = INVALID_SOCKET;
+            continue;
+        }
+        break;
+    }
 
-		if (ConnectSocket == INVALID_SOCKET) {
-			cout << "socket ���������� � �������: " << WSAGetLastError() << "\n";
-			WSACleanup();
-			return 13;
-		}
+    freeaddrinfo(servinfo);
 
-		iResult = connect(ConnectSocket, ptr->ai_addr, (int)ptr->ai_addrlen);
-		if (iResult == SOCKET_ERROR) {
-			closesocket(ConnectSocket);
-			ConnectSocket = INVALID_SOCKET;
-			continue;
-		}
+    if (clientSock == INVALID_SOCKET) {
+        cout << "Unable to connect to server!\n";
+        WSACleanup();
+        return 1;
+    }
 
-		break;
-	}
+    DisableCursor();
 
-	freeaddrinfo(result);
+    HANDLE hThreadSend = CreateThread(NULL, 0, CommandSender, NULL, 0, NULL);
+    HANDLE hThreadReceive = CreateThread(NULL, 0, ResponseReceiver, NULL, 0, NULL);
 
-	if (ConnectSocket == INVALID_SOCKET) {
-		cout << "���������� ������������ � �������!\n";
-		WSACleanup();
-		return 14;
-	}
+    WaitForSingleObject(hThreadSend, INFINITE);
+    WaitForSingleObject(hThreadReceive, INFINITE);
 
-	HideCursor();
+    CloseHandle(hThreadSend);
+    CloseHandle(hThreadReceive);
 
-	// ������� ������ � �������������� CreateThread
-	HANDLE senderThreadHandle = CreateThread(0, 0, Sender, 0, 0, 0);
-	HANDLE receiverThreadHandle = CreateThread(0, 0, Receiver, 0, 0, 0);
+    closesocket(clientSock);
+    WSACleanup();
 
-	if (senderThreadHandle == NULL || receiverThreadHandle == NULL) {
-		cout << "������ �������� �������.\n";
-		closesocket(ConnectSocket);
-		WSACleanup();
-		return 16;
-	}
-
-
-
-	// ������� ���������� �������
-	WaitForSingleObject(senderThreadHandle, INFINITE);
-	WaitForSingleObject(receiverThreadHandle, INFINITE);
-
-	// ��������� ����������� �������
-	CloseHandle(senderThreadHandle);
-	CloseHandle(receiverThreadHandle);
-
-	closesocket(ConnectSocket);
-	WSACleanup();
-
-	return 0;
+    return 0;
 }
